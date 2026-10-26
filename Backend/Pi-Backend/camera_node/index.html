@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="theme-color" content="#0a0e17">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Smart Trolley | Edge Vision Node</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+  <!-- Header Bar -->
+  <header class="header-bar">
+    <div class="brand-section">
+      <div class="status-dot" id="system-status-dot" title="USB Tunnel Active"></div>
+      <div>
+        <h1 class="brand-title">EDGE VISION NODE</h1>
+        <p class="brand-sub" id="usb-target-sub">USB Tunnel: localhost:5000</p>
+      </div>
+    </div>
+
+    <!-- Camera Role Selector (CAM_LEFT vs CAM_RIGHT) -->
+    <div class="role-selector" role="radiogroup" aria-label="Camera Identity">
+      <button type="button" class="role-btn active" id="btn-role-left" data-role="CAM_LEFT">CAM_LEFT</button>
+      <button type="button" class="role-btn" id="btn-role-right" data-role="CAM_RIGHT">CAM_RIGHT</button>
+    </div>
+  </header>
+
+  <!-- Live Camera & Canvas Viewport -->
+  <main class="viewport-container" id="viewport-box">
+    <!-- Hidden raw video element used as canvas texture source -->
+    <video id="webcam-video" playsinline muted autoplay></video>
+    
+    <!-- 640x480 Viewport with Bounding Boxes, Centroids & Virtual Gate Line -->
+    <canvas id="vision-canvas" width="640" height="480"></canvas>
+
+    <!-- On-screen Status & Diagnostic Error Overlay -->
+    <div class="camera-status-overlay" id="camera-status-overlay">
+      <div class="status-spinner" id="camera-spinner"></div>
+      <div class="status-title" id="camera-status-title">Initializing Camera...</div>
+      <div class="status-subtitle" id="camera-status-sub">Requesting media device stream</div>
+      <div class="camera-action-btns" id="camera-action-btns" style="display: none;">
+        <button type="button" class="btn btn-secondary" id="btn-camera-retry">
+          <span>↺</span> Retry Camera
+        </button>
+        <button type="button" class="btn btn-in" id="btn-camera-sim">
+          <span>▶</span> Start Simulation Feed
+        </button>
+      </div>
+    </div>
+  </main>
+
+  <!-- Real-time Telemetry HUD Grid -->
+  <section class="telemetry-grid">
+    <div class="telemetry-card">
+      <div class="telemetry-label">INFERENCE FPS</div>
+      <div class="telemetry-val fps-optimal" id="val-fps">--</div>
+    </div>
+    <div class="telemetry-card">
+      <div class="telemetry-label">PROVIDER</div>
+      <div class="telemetry-val">
+        <span class="provider-badge" id="val-provider">INIT...</span>
+      </div>
+    </div>
+    <div class="telemetry-card">
+      <div class="telemetry-label">LATENCY</div>
+      <div class="telemetry-val" id="val-latency">-- ms</div>
+    </div>
+    <div class="telemetry-card">
+      <div class="telemetry-label">TRACKED</div>
+      <div class="telemetry-val" id="val-tracked-count">0</div>
+    </div>
+  </section>
+
+  <!-- Calibration & Controls Panel -->
+  <section class="controls-card">
+    <div class="section-title">
+      <span>Calibration & Settings</span>
+      <span class="telemetry-label" id="val-model-status">Detecting...</span>
+    </div>
+
+    <!-- Virtual Gate Y_gate Slider -->
+    <div class="slider-group">
+      <div class="slider-label-row">
+        <span>Virtual Gate Position (Y_gate):</span>
+        <span class="slider-val" id="val-gate-y">240 px (50%)</span>
+      </div>
+      <input type="range" id="slider-gate-y" min="40" max="440" value="240" step="2">
+    </div>
+
+    <!-- Confidence Threshold Slider -->
+    <div class="slider-group">
+      <div class="slider-label-row">
+        <span>Confidence Threshold:</span>
+        <span class="slider-val" id="val-conf-thresh">40%</span>
+      </div>
+      <input type="range" id="slider-conf" min="15" max="85" value="40" step="5">
+    </div>
+
+    <!-- Invert Crossing Direction Toggle -->
+    <div class="toggle-group">
+      <div>
+        <div style="font-weight: 600; color: #fff;">Invert Crossing Direction</div>
+        <div style="font-size: 0.68rem; color: var(--text-muted);">Enable if phone is mounted upside down</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="toggle-invert-direction">
+        <span class="slider-switch"></span>
+      </label>
+    </div>
+
+    <!-- Manual Test / Diagnostic Action Grid -->
+    <div class="action-grid">
+      <button type="button" class="btn btn-in" id="btn-manual-in">
+        <span>⬇</span> Test DROP IN (CROSS_IN)
+      </button>
+      <button type="button" class="btn btn-out" id="btn-manual-out">
+        <span>⬆</span> Test REMOVAL (CROSS_OUT)
+      </button>
+      <button type="button" class="btn btn-secondary" id="btn-reset-tracker">
+        <span>↺</span> Reset Centroid Trackers
+      </button>
+    </div>
+  </section>
+
+  <!-- Real-Time Dispatched Event Feed -->
+  <section class="event-feed-card">
+    <div class="section-title">
+      <span>Last Dispatched Reaction Events</span>
+      <span class="telemetry-label" id="event-stats">0 Events</span>
+    </div>
+    <ul class="event-list" id="event-history-list">
+      <li class="event-item">
+        <div>
+          <span class="event-name">SYSTEM READY</span>
+          <span class="event-meta">Awaiting physical item trajectory...</span>
+        </div>
+        <span class="event-status">IDLE</span>
+      </li>
+    </ul>
+  </section>
+
+  <!-- Dynamic Runtime Loader: Local first, fallback to CDN -->
+  <script>
+    (function bootstrapVisionRuntime() {
+      function loadScript(src) {
+        return new Promise(function(resolve, reject) {
+          var s = document.createElement('script');
+          s.src = src;
+          s.async = false;
+          s.onload = function() { resolve(src); };
+          s.onerror = function() { reject(new Error('Failed to load: ' + src)); };
+          document.head.appendChild(s);
+        });
+      }
+
+      // Check if ONNX runtime is available locally; if not, pull CDN; then load engine
+      loadScript('./ort.min.js')
+        .then(function() {
+          console.log('[Vision Boot] Local ort.min.js loaded successfully.');
+          return loadScript('./vision_engine.js');
+        })
+        .catch(function(err) {
+          console.warn('[Vision Boot] Local ort.min.js not found. Loading from CDN fallback...', err.message);
+          return loadScript('https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js')
+            .then(function() {
+              console.log('[Vision Boot] CDN ort.min.js loaded successfully.');
+              return loadScript('./vision_engine.js');
+            })
+            .catch(function(cdnErr) {
+              console.warn('[Vision Boot] ONNX Runtime CDN unavailable. Loading vision_engine.js in Motion-Fallback mode.', cdnErr.message);
+              return loadScript('./vision_engine.js');
+            });
+        });
+    })();
+  </script>
+</body>
+</html>
